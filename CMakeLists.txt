@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 project(code_example)
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
 
 set_target_properties(${TARGET} PROPERTIES
     COMPILE_FLAGS "-pthread"
