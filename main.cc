@@ -11,6 +11,7 @@ class RwLock;
 
 std::vector<RwLock> g_locks(N);
 std::vector<int64_t> g_nums(N);
+int g_num = 100;
 
 class RwLock {
  public:
@@ -18,28 +19,49 @@ class RwLock {
   ~RwLock() = default;
 
   bool ReadLock() {
-    return lock_.try_lock_shared();
-  }
-  bool WriteLock() {
-    return lock_.try_lock();
+    std::lock_guard<std::mutex> guard(mutex_);
+
+    bool locked = lock_.try_lock_shared();
+    if (!locked) {
+      return false;
+    }
+
+    client_num_++;
+    assert(client_num_ <= g_num);
+    return true;
   }
   void ReadUnlock() {
     std::lock_guard<std::mutex> guard(mutex_);
 
-    set_client_id(0);
+    client_num_--;
+    assert(client_num_ >= 0);
     lock_.unlock_shared();
+  }
+
+  bool WriteLock() {
+    std::lock_guard<std::mutex> guard(mutex_);
+
+    bool locked = lock_.try_lock();
+    if (!locked) {
+      return false;
+    }
+
+    client_num_++;
+    assert(client_num_ <= g_num);
+    return true;
   }
   void WriteUnlock() {
     std::lock_guard<std::mutex> guard(mutex_);
 
-    set_client_id(0);
+    client_num_--;
+    assert(client_num_ >= 0);
     lock_.unlock();
   }
 
-  bool Upgrade(uint64_t client_id) {
+  bool Upgrade() {
     std::lock_guard<std::mutex> guard(mutex_);
 
-    if (client_id != client_id_) {
+    if (client_num_ > 1) {
       return false;
     }
 
@@ -48,15 +70,11 @@ class RwLock {
     return true;
   }
 
-  void set_client_id(uint64_t client_id) {
-    client_id_ = client_id;
-  }
-
  private:
   std::mutex mutex_{};
 
   std::shared_mutex lock_{};
-  uint64_t client_id_ = 0;
+  uint64_t client_num_ = 0;
 };
 
 void InitNums() {
@@ -76,35 +94,27 @@ void ThreadFunc(int client_id, int n) {
     // i, i_1, i_2 can't be same
     if (!g_locks[i].ReadLock()) {
       continue;
-    } else {
-      g_locks[i].set_client_id(client_id);
     }
 
     if (!g_locks[i_1].ReadLock()) {
       g_locks[i].ReadUnlock();
       continue;
-    } else {
-      g_locks[i_1].set_client_id(client_id);
     }
 
     if (!g_locks[i_2].ReadLock()) {
       g_locks[i].ReadUnlock();
       g_locks[i_1].ReadUnlock();
       continue;
-    } else {
-      g_locks[i_2].set_client_id(client_id);
     }
 
     // j may be the same with i/i_1/i_2
     if (!g_locks[j].WriteLock()) {
-      if (!g_locks[j].Upgrade(client_id)) {
+      if ((j != i && j != i_1 && j != i_2) || !g_locks[j].Upgrade()) {
         g_locks[i].ReadUnlock();
         g_locks[i_1].ReadUnlock();
         g_locks[i_2].ReadUnlock();
         continue;
       }
-    } else {
-      g_locks[j].set_client_id(client_id);
     }
 
     n--;
@@ -122,13 +132,12 @@ void ThreadFunc(int client_id, int n) {
 int main() {
   InitNums();
 
-  int num = 10;
-  std::vector<std::thread> thread_pool(num);
-  for (int i = 0; i < num; i++) {
-    thread_pool[i] = std::thread(&ThreadFunc, i+1, N);
+  std::vector<std::thread> thread_pool(g_num);
+  for (int i = 0; i < g_num; i++) {
+    thread_pool[i] = std::thread(&ThreadFunc, i + 1, N);
   }
 
-  for (int i = 0; i < num; i++) {
+  for (int i = 0; i < g_num; i++) {
     thread_pool[i].join();
   }
 
